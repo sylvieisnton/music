@@ -1,4 +1,5 @@
 #include "args.hpp"
+#include "checksum.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -43,7 +44,8 @@ int identifyNote(const std::vector<double> &samples, std::size_t start)
     return best;
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[])
+{
     Options options;
 
     try
@@ -121,35 +123,74 @@ int main(int argc, char* argv[]) {
     std::cout << samples.size() << " samples\n";
     std::cout << "Found " << samples.size() / samplesPerNote << " notes\n";
 
-    std::ofstream output(options.output, std::ios::binary);
+    std::vector<unsigned char> decoded;
 
-    if (!output)
+    for (std::size_t start = 0; start < samples.size(); start += samplesPerNote * 2)
     {
-        std::cerr << "Failed to open output file." << std::endl;
+        int first = identifyNote(samples, start);
+        int second = identifyNote(samples, start + samplesPerNote);
+
+        decoded.push_back(
+            static_cast<unsigned char>(first * 16 + second));
+    }
+
+    if (decoded.size() < 16 || decoded[0] != 'M' || decoded[1] != 'U' || decoded[2] != 'S' || decoded[3] != '1')
+    {
+        std::cerr << "Broken MUS1 header\n";
         return 1;
     }
 
-    for (std::size_t start = 0;
-         start < samples.size();
-         start += samplesPerNote * 2)
+    std::uint64_t expectedSize = 0;
+    std::uint32_t expectedCrc = 0;
+
+    for (int i = 0; i < 8; ++i)
     {
+        expectedSize |= static_cast<std::uint64_t>(decoded[4 + i]) << (8 * i);
+    }
 
-        int firstNote = identifyNote(samples, start);
-        int secondNote = identifyNote(samples, start + samplesPerNote);
+    for (int i = 0; i < 4; ++i)
+    {
+        expectedCrc |= static_cast<std::uint32_t>(decoded[12 + i]) << (8 * i);
+    }
 
-        int byte = firstNote * 16 + secondNote;
-        output.put(static_cast<char>(byte));
+    if (expectedSize !=decoded.size() - 16) {
+        std::cerr << "File length check failed\n";
+        return 1;
+    }
+
+    std::uint32_t actualCrc = 0xFFFFFFFFu;
+
+    for (std::size_t i = 16; i < decoded.size(); ++i) {
+        actualCrc = checksum(actualCrc, decoded[i]);
+    }
+
+    actualCrc ^= 0xFFFFFFFFu;
+
+    if (actualCrc!=expectedCrc) {
+        std::cerr << "Recovered data is damaged\n";
+        return 1;
+    }
+
+    std::ofstream output(options.output, std::ios::binary);
+
+    if (!output) {
+        std::cerr << "Failed to open output file\n";
+        return 1;
+    }
+
+    for (std::size_t i=16; i<decoded.size(); ++i) {
+        output.put(static_cast<char>(decoded[i]));
     }
 
     output.close();
 
-    if (!output)
-    {
-        std::cerr << "Failed to write output file." << std::endl;
+    if (!output) {
+        std::cerr << "Failed to write output file\n";
         return 1;
     }
 
-    std::cout << "Saved " << options.output << std::endl;
+    std::cout << "Checksum verified\n";
+    std::cout << "Saved " << options.output << '\n';
 
     return 0;
 }
