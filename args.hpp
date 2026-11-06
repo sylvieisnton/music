@@ -10,15 +10,17 @@ struct Options {
     bool help = false;
 };
 
-inline void help(const char* program) {
+inline void help(const char *program)
+{
     std::cout
-    << "Usage: " << program << " -i <input> -o <output>\n"
-    << "  -i, --input     input file\n"
-    << "  -o, --output    output file\n"
-    << "  -h, --help      show this menu\n";
+        << "Usage: " << program << " -i <input> -o <output>\n"
+        << "  -i, --input     input file\n"
+        << "  -o, --output    output file\n"
+        << "  -h, --help      show this menu\n";
 }
 
-inline Options parse(int argc, char* argv[]) {
+inline Options parse(int argc, char *argv[])
+{
     Options options;
 
     for (int i = 1; i < argc; ++i) {
@@ -26,37 +28,30 @@ inline Options parse(int argc, char* argv[]) {
 
         if (arg == "-h" || arg == "--help") {
             options.help = true;
+            continue;
         }
-        if (arg == "-i" || arg == "--input") {
-            if (i + 1 < argc) {
-                options.input = argv[++i];
-            } else {
-                throw std::invalid_argument("Missing input file");
-            }
-        }
-        if (arg == "-o" || arg == "--output") {
-            if (i + 1 < argc) {
-                options.output = argv[++i];
-            } else {
-                throw std::invalid_argument("Missing output file");
-            }
+        if (arg != "-i" && arg != "--input" && arg != "-o" && arg != "--output") {
+            throw std::invalid_argument("Unknown argument: " + arg);
         }
 
-        std::string value = argv[i+1];
+        if (i + 1 >= argc) {
+            throw std::invalid_argument("Missing value for " + arg);
+        }
+
+        std::string value = argv[i + 1];
 
         if (value.empty() || value[0] == '-') {
             throw std::invalid_argument("Missing value for " + arg);
         }
 
-        ++i;
-
-        std::string& destination = (arg == "-i" || arg == "--input") ? options.input : options.output;
+        std::string &destination = (arg == "-i" || arg == "--input") ? options.input : options.output;
 
         if (!destination.empty()) {
             throw std::invalid_argument("Duplicate argument: " + arg);
         }
 
         destination = value;
+        ++i;
     }
 
     if (options.input.empty() || options.output.empty()) {
