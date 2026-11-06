@@ -1,3 +1,5 @@
+#include "args.hpp"
+
 #include <iostream>
 #include <fstream>
 #include <cmath>
@@ -38,12 +40,12 @@ void m32(std::ostream& out, std::int32_t value) {
     m16(out, static_cast<std::uint16_t>(value >> 16));
 }
 
-bool save(const std::vector<std::int16_t>& samples) {
+bool save(const std::vector<std::int16_t>& samples, const std::string& outputPath) {
     if (samples.size() > (0xFFFFFFFFu - 36u)/2u) {
         return false;
     }
 
-    std::ofstream out("song.wav", std::ios::binary);
+    std::ofstream out(outputPath, std::ios::binary);
 
     if (!out) {
         return false;
@@ -75,8 +77,23 @@ bool save(const std::vector<std::int16_t>& samples) {
     return static_cast<bool>(out);
 }
 
-int main() {
-    std::ifstream input("thing.txt", std::ios::binary);
+int main(int argc, char* argv[]) {
+    Options options;
+
+    try {
+        options = parse(argc, argv);
+    }
+    catch (const std::exception& error) {
+        std::cerr << "Error: " << error.what() << "\n\n";
+        help(argv[0]);
+        return 1;
+    }
+
+    if (options.help || argc == 1) {
+        help(argv[0]);
+        return 0;
+    }
+    std::ifstream input(options.input, std::ios::binary);
 
     if (!input) {
         std::cerr << "Failed to open file\n";
@@ -103,12 +120,12 @@ int main() {
     double length = static_cast<double>(quoteunquotemusic.size()) / sampleRate;
     std::cout << "Length: " << length << " seconds\n";
 
-    if (!save(quoteunquotemusic)) {
+    if (!save(quoteunquotemusic, options.output)) {
         std::cerr << "Failed to save file\n";
         return 1;
     }
 
-    std::cout << "Saved song.wav\n";
+    std::cout << "Saved " << options.output << "\n";
 
     return 0;
 }

@@ -1,3 +1,5 @@
+#include "args.hpp"
+
 #include <iostream>
 #include <fstream>
 #include <cmath>
@@ -41,9 +43,27 @@ int identifyNote(const std::vector<double> &samples, std::size_t start)
     return best;
 }
 
-int main()
-{
-    std::ifstream input("song.wav", std::ios::binary);
+int main(int argc, char* argv[]) {
+    Options options;
+
+    try
+    {
+        options = parse(argc, argv);
+    }
+    catch (const std::exception &error)
+    {
+        std::cerr << "Error: " << error.what() << "\n\n";
+        help(argv[0]);
+        return 1;
+    }
+
+    if (options.help || argc == 1)
+    {
+        help(argv[0]);
+        return 0;
+    }
+    std::ifstream input(options.input, std::ios::binary);
+
     if (!input)
     {
         std::cerr << "Failed to open input file." << std::endl;
@@ -101,7 +121,7 @@ int main()
     std::cout << samples.size() << " samples\n";
     std::cout << "Found " << samples.size() / samplesPerNote << " notes\n";
 
-    std::ofstream output("rec.txt", std::ios::binary);
+    std::ofstream output(options.output, std::ios::binary);
 
     if (!output)
     {
@@ -129,7 +149,7 @@ int main()
         return 1;
     }
 
-    std::cout << "Saved rec.txt" << std::endl;
+    std::cout << "Saved " << options.output << std::endl;
 
     return 0;
 }
