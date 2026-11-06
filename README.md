@@ -1,8 +1,10 @@
-# music
+# musical files
 
 store files as "music"
 
-encode:
+## Usage
+
+Encode:
 ```sh
 ./encode
 ```
@@ -10,10 +12,19 @@ encode:
 .\encode.exe
 ```
 
-decode:
+Decode:
 ```sh
 ./decode
 ```
 ```pwsh
 .\decode.exe
+```
+
+## Building
+
+Compile `decode.cpp` and `encode.cpp` with your desired C++ compiler.
+```sh
+# Example
+g++ decode.cpp -o decode
+g++ encode.cpp -o encode
 ```
