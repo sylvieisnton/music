@@ -1,11 +1,15 @@
 #include "args.hpp"
 #include "checksum.hpp"
+#include "music.hpp"
 
 #include <iostream>
 #include <fstream>
 #include <cmath>
 #include <vector>
 #include <cstdint>
+#include <filesystem>
+#include <chrono>
+#include <iomanip>
 
 double frequency(int note)
 {
@@ -15,9 +19,8 @@ double frequency(int note)
 constexpr int sampleRate = 44100;
 constexpr double pi = 3.14159265358979323846;
 
-std::vector<std::int16_t> generateTone(double frequency)
+std::vector<std::int16_t> generateTone(double frequency, int sampleCt)
 {
-    constexpr int sampleCt = sampleRate / 10;
     std::vector<std::int16_t> samples(sampleCt);
 
     for (int i = 0; i < sampleCt; ++i)
@@ -45,24 +48,17 @@ void m32(std::ostream &out, std::uint32_t value)
     m16(out, static_cast<std::uint16_t>(value >> 16));
 }
 
-bool save(const std::vector<std::int16_t> &samples, const std::string &outputPath)
+bool writeWavHeader(std::ostream &out, std::uint64_t sampleCt)
 {
-    if (samples.size() > (0xFFFFFFFFu - 36u) / 2u)
+    if (sampleCt > (0xFFFFFFFFu - 36u) / 2u)
     {
         return false;
     }
 
-    std::ofstream out(outputPath, std::ios::binary);
-
-    if (!out)
-    {
-        return false;
-    }
-
-    auto size = static_cast<std::uint32_t>(samples.size() * 2);
+    auto dataSize = static_cast<std::uint32_t>(sampleCt * 2);
 
     out.write("RIFF", 4);
-    m32(out, size + 36);
+    m32(out, 36u + dataSize);
     out.write("WAVE", 4);
 
     out.write("fmt ", 4);
@@ -75,14 +71,7 @@ bool save(const std::vector<std::int16_t> &samples, const std::string &outputPat
     m16(out, 16);
 
     out.write("data", 4);
-    m32(out, size);
-
-    for (std::int16_t sample : samples)
-    {
-        m16(out, static_cast<std::uint16_t>(sample));
-    }
-
-    out.close();
+    m32(out, dataSize);
     return static_cast<bool>(out);
 }
 
@@ -145,28 +134,88 @@ int main(int argc, char *argv[])
     std::cout << "CRC-32: " << std::hex << crc
               << std::dec << '\n';
 
-    std::vector<std::int16_t> quoteunquotemusic;
+    unsigned char speedId = 1;
+    int noteSamples = sampleRate / 10;
 
-    auto eByte = [&](unsigned char value)
+    if (options.speed == "slow")
+    {
+        speedId = 0;
+        noteSamples = sampleRate / 5;
+    }
+    else if (options.speed == "fast")
+    {
+        speedId = 2;
+        noteSamples = sampleRate / 20;
+    }
+
+    Scale payloadScale = Scale::Chromatic;
+
+    if (options.scale == "pentatonic")
+    {
+        payloadScale = Scale::Pentatonic;
+    }
+    else if (options.scale == "minor")
+    {
+        payloadScale = Scale::Minor;
+    }
+
+    constexpr std::uint64_t headerSamples = 18ull * 2ull * (sampleRate / 10);
+
+    std::uint64_t samplesPerByte = 2ull * noteSamples;
+
+    constexpr std::uint64_t maxSamples = (0xFFFFFFFFull - 36ull) / 2ull;
+
+    if (fileSize > (maxSamples - headerSamples) / samplesPerByte)
+    {
+        std::cerr << "Input is too large for this WAV format\n";
+        return 1;
+    }
+
+    std::uint64_t totalSamples = headerSamples + fileSize * samplesPerByte;
+
+    std::error_code pathError;
+
+    if (std::filesystem::equivalent(
+            options.input, options.output, pathError))
+    {
+        std::cerr << "Input and output must be different files\n";
+        return 1;
+    }
+
+    std::ofstream out(options.output, std::ios::binary);
+
+    if (!out)
+    {
+        std::cerr << "Failed to open output file\n";
+        return 1;
+    }
+
+    if (!writeWavHeader(out, totalSamples))
+    {
+        std::cerr << "Failed to write WAV header\n";
+        return 1;
+    }
+
+    auto eByte = [&](unsigned char value, int count = sampleRate / 10, Scale scale = Scale::Chromatic)
     {
         unsigned int note1 = value / 16;
         unsigned int note2 = value % 16;
 
-        auto samples1 = generateTone(frequency(note1));
-        auto samples2 = generateTone(frequency(note2));
+        auto samples1 = generateTone(noteFrequency(note1, scale), count);
+        auto samples2 = generateTone(noteFrequency(note2, scale), count);
 
-        quoteunquotemusic.insert(
-            quoteunquotemusic.end(),
-            samples1.begin(),
-            samples1.end());
+        for (std::int16_t sample : samples1)
+        {
+            m16(out, static_cast<std::uint16_t>(sample));
+        }
 
-        quoteunquotemusic.insert(
-            quoteunquotemusic.end(),
-            samples2.begin(),
-            samples2.end());
+        for (std::int16_t sample : samples2)
+        {
+            m16(out, static_cast<std::uint16_t>(sample));
+        }
     };
 
-    const char magic[] = "MUS1";
+    const char magic[] = "MUS3";
 
     for (int i = 0; i < 4; ++i)
     {
@@ -183,12 +232,62 @@ int main(int argc, char *argv[])
         eByte(static_cast<unsigned char>((crc >> (8 * i)) & 0xFFu));
     }
 
+    eByte(speedId);
+
+    eByte(static_cast<unsigned char>(payloadScale));
+
     char byte;
+
+    std::uint64_t processed = 0;
+
+    auto started = std::chrono::steady_clock::now();
+    auto lastUpdate = started;
 
     while (input.get(byte))
     {
-        eByte(static_cast<unsigned char>(byte));
+        eByte(static_cast<unsigned char>(byte), noteSamples, payloadScale);
+
+        if (!out)
+        {
+            std::cerr << "\nFailed while writing audio\n";
+            return 1;
+        }
+
+        ++processed;
+
+        auto now = std::chrono::steady_clock::now();
+
+        if (now - lastUpdate >= std::chrono::milliseconds(250) ||
+            processed == fileSize)
+        {
+
+            double elapsed =
+                std::chrono::duration<double>(now - started).count();
+
+            double percent =
+                100.0 * static_cast<double>(processed) / fileSize;
+
+            double remaining =
+                elapsed * static_cast<double>(fileSize - processed) / processed;
+
+            std::cout << '\r'
+                      << std::fixed << std::setprecision(1)
+                      << "Encoding: " << percent << "% | "
+                      << processed << '/' << fileSize << " bytes | "
+                      << "ETA: " << remaining << " s          "
+                      << std::flush;
+
+            lastUpdate = now;
+        }
     }
+
+    if (fileSize == 0)
+    {
+        std::cout << "Encoding: 100% | 0/0 bytes";
+    }
+
+    std::cout << '\n'
+              << std::defaultfloat;
 
     if (!input.eof())
     {
@@ -196,16 +295,18 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    double length = static_cast<double>(quoteunquotemusic.size()) / sampleRate;
-    std::cout << "Length: " << length << " seconds\n";
+    out.close();
 
-    if (!save(quoteunquotemusic, options.output))
+    if (!out)
     {
-        std::cerr << "Failed to save file\n";
+        std::cerr << "Failed to write output file\n";
         return 1;
     }
 
-    std::cout << "Saved " << options.output << "\n";
+    double length = static_cast<double>(totalSamples) / sampleRate;
+
+    std::cout << "Length: " << length << " seconds\n";
+    std::cout << "Saved " << options.output << '\n';
 
     return 0;
 }
