@@ -95,6 +95,13 @@ int main(int argc, char *argv[])
         help(argv[0]);
         return 0;
     }
+
+    if (options.raw)
+    {
+        std::cerr << "--raw is only supported by the decoder\n";
+        return 1;
+    }
+
     std::ifstream input(options.input, std::ios::binary);
 
     if (!input)

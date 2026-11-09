@@ -1,6 +1,8 @@
 #include "args.hpp"
 #include "checksum.hpp"
 #include "music.hpp"
+#include "wav.hpp"
+#include <optional>
 
 #include <iostream>
 #include <fstream>
@@ -15,22 +17,21 @@ constexpr int sampleRate = 44100;
 constexpr int samplesPerNote = sampleRate / 10;
 constexpr double pi = 3.14159265358979323846;
 
-int identifyNote(const std::vector<double> &samples, std::size_t start, int count, Scale scale)
+int identifyNote(const std::vector<double> &samples, std::size_t start, int count, Scale scale, std::uint32_t rate = sampleRate)
 {
     int best = 0;
     double bestScore = -1.0;
 
     for (int note = 0; note < 16; ++note)
     {
-        double frequency = 440.0 * std::pow(2.0, note / 12.0);
+        double frequency = noteFrequency(note, scale);
 
         double sine = 0.0;
         double cosine = 0.0;
 
         for (int i = 0; i < count; ++i)
         {
-            double frequency = noteFrequency(note, scale);
-            double angle = 2.0 * pi * frequency * i / sampleRate;
+            double angle = 2.0 * pi * frequency * i / rate;
             double sample = samples[start + i];
 
             sine += sample * std::sin(angle);
@@ -49,35 +50,23 @@ int identifyNote(const std::vector<double> &samples, std::size_t start, int coun
     return best;
 }
 
-bool readNote(std::istream &input, int &note, int count = sampleRate / 10, Scale scale = Scale::Chromatic)
+bool readNote(WavReader &input, int &note, int count = sampleRate / 10, Scale scale = Scale::Chromatic)
 {
     std::vector<double> samples(count);
 
     for (int i = 0; i < count; ++i)
     {
-        int low = input.get();
-        int high = input.get();
-
-        if (low == std::char_traits<char>::eof() || high == std::char_traits<char>::eof())
+        if (!input.readFrame(samples[i]))
         {
             return false;
         }
-
-        int value = low | (high << 8);
-
-        if (value >= 32768)
-        {
-            value -= 65536;
-        }
-
-        samples[i] = static_cast<double>(value);
     }
 
-    note = identifyNote(samples, 0, count, scale);
+    note = identifyNote(samples, 0, count, scale, input.sampleRate);
     return true;
 }
 
-bool readByte(std::istream &input, unsigned char &byte, int count = sampleRate / 10, Scale scale = Scale::Chromatic)
+bool readByte(WavReader &input, unsigned char &byte, int count = sampleRate / 10, Scale scale = Scale::Chromatic)
 {
     int note1;
     int note2;
@@ -100,7 +89,7 @@ struct MusicHeader
     Scale scale = Scale::Chromatic;
 };
 
-bool readMusicHeader(std::istream &input, MusicHeader &header)
+bool readMusicHeader(WavReader &input, MusicHeader &header)
 {
     unsigned char bytes[18];
 
@@ -193,74 +182,73 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    char header[44];
+    std::optional<WavReader> wav;
 
-    if (!input.read(header, 44))
+    try
     {
-        std::cerr << "Failed to read WAV header." << std::endl;
-        return 1;
+        wav.emplace(input);
     }
-
-    if (std::memcmp(header, "RIFF", 4) != 0 || std::memcmp(header + 8, "WAVE", 4) != 0 || std::memcmp(header + 36, "data", 4) != 0)
+    catch (const std::exception &error)
     {
-        std::cerr << "Invalid WAV file format." << std::endl;
-        return 1;
-    }
-
-    std::vector<double> samples;
-
-    auto headerNumber = [&](int offset, int count)
-    {
-        std::uint32_t value = 0;
-
-        for (int i = 0; i < count; ++i)
-        {
-            value |= static_cast<std::uint32_t>(static_cast<unsigned char>(header[offset + i])) << (8 * i);
-        }
-
-        return value;
-    };
-
-    if (std::memcmp(header + 12, "fmt ", 4) != 0 ||
-        headerNumber(16, 4) != 16 ||
-        headerNumber(20, 2) != 1 ||
-        headerNumber(22, 2) != 1 ||
-        headerNumber(24, 4) != sampleRate ||
-        headerNumber(32, 2) != 2 ||
-        headerNumber(34, 2) != 16)
-    {
-        std::cerr << "Unsupported format\n";
-        return 1;
-    }
-
-    std::uint64_t dataSize = headerNumber(40, 4);
-
-    constexpr std::uint64_t headerAudioBytes = 18ull * 2ull * (sampleRate / 10) * 2ull;
-
-    if (dataSize < headerAudioBytes)
-    {
-        std::cerr << "Incomplete music header\n";
+        std::cerr << error.what() << '\n';
         return 1;
     }
 
     MusicHeader music;
 
-    if (!readMusicHeader(input, music))
+    if (options.raw)
     {
-        return 1;
+        music.noteSamples = wav->sampleRate / 10;
+
+        if (options.speed == "slow")
+        {
+            music.noteSamples = wav->sampleRate / 5;
+        }
+        else if (options.speed == "fast")
+        {
+            music.noteSamples = wav->sampleRate / 20;
+        }
+
+        if (options.scale == "pentatonic")
+        {
+            music.scale = Scale::Pentatonic;
+        }
+        else if (options.scale == "minor")
+        {
+            music.scale = Scale::Minor;
+        }
+
+        music.fileSize = wav->remainingFrames() / (2ull * music.noteSamples);
     }
-
-    std::uint64_t payloadAudioBytes =
-        dataSize - headerAudioBytes;
-
-    std::uint64_t audioBytesPerByte =
-        2ull * music.noteSamples * 2ull;
-
-    if (payloadAudioBytes % audioBytesPerByte != 0 ||
-        music.fileSize != payloadAudioBytes / audioBytesPerByte)
+    else
     {
-        std::cerr << "File length check failed\n";
-        return 1;
+        if (wav->sampleRate != sampleRate)
+        {
+            std::cerr << "Use --raw for ordinary audio\n";
+            return 1;
+        }
+
+        try
+        {
+            if (!readMusicHeader(*wav, music))
+            {
+                return 1;
+            }
+        }
+        catch (const std::exception &error)
+        {
+            std::cerr << error.what() << '\n';
+            return 1;
+        }
+
+        std::uint64_t framesPerByte = 2ull * music.noteSamples;
+
+        if (wav->remainingFrames() % framesPerByte != 0 ||
+            music.fileSize != wav->remainingFrames() / framesPerByte)
+        {
+            std::cerr << "File length check failed\n";
+            return 1;
+        }
     }
 
     std::error_code pathError;
@@ -289,13 +277,24 @@ int main(int argc, char *argv[])
     {
         unsigned char byte;
 
-        if (!readByte(input, byte, music.noteSamples, music.scale))
+        try
         {
-            std::cerr << "Audio ended early\n";
+            if (!readByte(*wav, byte, music.noteSamples, music.scale))
+            {
+                std::cerr << "Audio ended early\n";
+                return 1;
+            }
+        }
+        catch (const std::exception &error)
+        {
+            std::cerr << error.what() << '\n';
             return 1;
         }
 
-        actualCrc = checksum(actualCrc, byte);
+        if (!options.raw)
+        {
+            actualCrc = checksum(actualCrc, byte);
+        }
         output.put(static_cast<char>(byte));
 
         if (!output)
@@ -339,16 +338,20 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    actualCrc ^= 0xFFFFFFFFu;
-
-    if (actualCrc != music.crc)
+    if (!options.raw)
     {
-        std::cerr
-            << "Checksum mismatch: output file is damaged\n";
-        return 1;
+        actualCrc ^= 0xFFFFFFFFu;
+
+        if (actualCrc != music.crc)
+        {
+            std::cerr
+                << "Checksum mismatch: output file is damaged\n";
+            return 1;
+        }
+
+        std::cout << "Checksum verified!\n";
     }
 
-    std::cout << "Checksum verified!\n";
     std::cout << "Saved " << options.output << '\n';
 
     return 0;

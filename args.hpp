@@ -11,6 +11,7 @@ struct Options
     std::string speed = "normal";
     std::string scale = "chromatic";
     bool help = false;
+    bool raw = false;
 };
 
 inline void help(const char *program)
@@ -21,7 +22,8 @@ inline void help(const char *program)
         << "  -o, --output    output file\n"
         << "  -s, --speed     slow, normal, fast (default: normal)\n"
         << "  -sc, --scale    chromatic, pentatonic, minor\n"
-        << "  -h, --help      show this menu\n";
+        << "  -h, --help      show this menu\n"
+        << "  -r, --raw       interpret ordinary WAV audio as arbitrary bytes\n";
 }
 
 inline Options parse(int argc, char *argv[])
@@ -94,6 +96,18 @@ inline Options parse(int argc, char *argv[])
             }
 
             scale = true;
+            continue;
+        }
+
+        if (arg == "--raw" || arg == "-r")
+        {
+            if (options.raw)
+            {
+                throw std::invalid_argument(
+                    "Duplicate argument: " + arg);
+            }
+
+            options.raw = true;
             continue;
         }
 
