@@ -5,3 +5,5 @@
 rec*.*
 *.wav
 .vscode
+*.wasm
+web/*code.mjs

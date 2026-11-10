@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Musical Files Demo</title>
+</head>
+
+<body>
+    <h1>Musical Files</h1>
+    <form id="form">
+        <fieldset id="controls">
+            <legend>Convert</legend>
+
+            <p>
+                <label>
+                    Operation
+                    <select id="mode">
+                        <option value="encode">File to WAV</option>
+                        <option value="decode">WAV to file</option>
+                    </select>
+                </label>
+            </p>
+
+            <p>
+                <label>
+                    Input file
+                    <input id="file" type="file" required>
+                </label>
+            </p>
+
+            <p>
+                <label>
+                    Speed
+                    <select id="speed">
+                        <option value="slow">Slow</option>
+                        <option value="normal">Normal</option>
+                        <option value="fast" selected>Fast</option>
+                    </select>
+                </label>
+
+                <label>
+                    Scale
+                    <select id="scale">
+                        <option value="chromatic">Chromatic</option>
+                        <option value="pentatonic">Pentatonic</option>
+                        <option value="minor">Minor</option>
+                    </select>
+                </label>
+            </p>
+
+            <p>
+                <label>
+                    <input id="raw" type="checkbox">
+                    Raw decode
+                </label>
+            </p>
+
+            <p>
+                Raw decoding uses the selected settings and skips verification.
+            </p>
+
+            <button type="submit">Run</button>
+        </fieldset>
+    </form>
+
+    <p><button id="cancel" type="button" disabled>Cancel</button></p>
+    <p id="status" role="status">Ready.</p>
+    <pre id="log"></pre>
+
+    <p><a id="download" hidden>Download result</a></p>
+    <audio id="audio" controls hidden></audio>
+
+    <script type="module">
+        const $ = (id) => document.getElementById(id);
+        let worker = null;
+        let resultUrl = null;
+        let busy = false;
+
+        function clearResult() {
+            $("audio").pause();
+            $("audio").removeAttribute("src");
+            $("audio").load();
+            $("audio").hidden = true;
+            $("download").hidden = true;
+            $("download").removeAttribute("href");
+
+            if (resultUrl) URL.revokeObjectURL(resultUrl);
+            resultUrl = null;
+        }
+
+        function finish(message) {
+            worker?.terminate();
+            worker = null;
+            busy = false;
+            $("controls").disabled = false;
+            $("cancel").disabled = true;
+            $("status").textContent = message;
+        }
+
+        $("cancel").onclick = () => finish("Cancelled.");
+
+        $("form").onsubmit = async (event) => {
+            event.preventDefault();
+            if (busy) return;
+
+            const file = $("file").files[0];
+            if (!file) return;
+
+            const mode = $("mode").value;
+            const speed = $("speed").value;
+            const scale = $("scale").value;
+            const raw = $("raw").checked;
+
+            const limit = mode === "encode" ? 1024 : 40 * 1024 * 1024;
+            if (file.size > limit) {
+                $("status").textContent = mode === "encode"
+                    ? "Choose a file no larger than 1 KiB."
+                    : "Choose a WAV no larger than 40 MiB.";
+                return;
+            }
+
+            clearResult();
+            $("log").textContent = "";
+            busy = true;
+            $("controls").disabled = true;
+            $("status").textContent = "Reading input…";
+
+            try {
+                const buffer = await file.arrayBuffer();
+
+                const current = new Worker(
+                    new URL("./worker.js", import.meta.url),
+                    { type: "module" }
+                );
+
+                worker = current;
+                $("cancel").disabled = false;
+                $("status").textContent = "Processing…";
+
+                current.onmessage = ({ data: message }) => {
+                    if (worker !== current) return;
+
+                    if (message.type === "log") {
+                        $("log").textContent = (
+                            $("log").textContent +
+                            message.text.replaceAll("\r", "\n") + "\n"
+                        ).slice(-12000);
+                        return;
+                    }
+
+                    if (message.type === "error") {
+                        finish(message.text);
+                        return;
+                    }
+
+                    if (message.type === "done") {
+                        const encoding = mode === "encode";
+                        const blob = new Blob([message.data], {
+                            type: encoding ? "audio/wav" : "application/octet-stream",
+                        });
+
+                        resultUrl = URL.createObjectURL(blob);
+                        $("download").href = resultUrl;
+                        $("download").download = encoding
+                            ? `${file.name}.wav`
+                            : `${file.name.replace(/\.wav$/i, "")}.decoded.bin`;
+                        $("download").hidden = false;
+
+                        if (encoding) {
+                            $("audio").src = resultUrl;
+                            $("audio").hidden = false;
+                        }
+
+                        finish(`Done. ${blob.size.toLocaleString()} output bytes.`);
+                    }
+                };
+
+                current.onerror = (event) => {
+                    if (worker !== current) return;
+                    event.preventDefault();
+                    finish(event.message || "Worker failed to load.");
+                };
+
+                current.onmessageerror = () => {
+                    if (worker === current) finish("Could not read worker response.");
+                };
+
+                current.postMessage(
+                    { mode, speed, scale, raw, buffer },
+                    [buffer]
+                );
+            } catch (error) {
+                finish(error?.message ?? String(error));
+            }
+        };
+    </script>
+</body>
+
+</html>
