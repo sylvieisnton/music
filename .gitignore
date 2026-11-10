@@ -7,3 +7,4 @@ rec*.*
 .vscode
 *.wasm
 web/*code.mjs
+.wrangler
